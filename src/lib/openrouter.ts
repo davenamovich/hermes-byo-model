@@ -1,10 +1,10 @@
 import "server-only";
-import { ALLOWED_MODELS } from "@/config/models";
+import { ALLOWED_MODELS, DEFAULT_PRICE, MODEL_PRICES } from "@/config/models";
 
 // The OpenRouter egress. Your key lives here and nowhere else on the server; nothing in this file
 // is reachable from the browser.
 
-export const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
+export const OPENROUTER_BASE = "https://ai.starimg.ru/v1";
 
 export function openrouterKey(): string | null {
   const key = process.env.OPENROUTER_API_KEY?.trim();
@@ -67,12 +67,28 @@ export function extractUsage(payload: unknown, fallbackModel: string): LlmUsage 
   const usage = body.usage;
   if (!usage || typeof usage !== "object") return null;
 
-  return {
-    model: typeof body.model === "string" && body.model ? body.model : fallbackModel,
-    inputTokens: toNumber(usage.prompt_tokens),
-    outputTokens: toNumber(usage.completion_tokens),
-    costMicros: Math.round(toNumber(usage.cost) * 1_000_000),
-  };
+  const model = typeof body.model === "string" && body.model ? body.model : fallbackModel;
+  const inputTokens = toNumber(usage.prompt_tokens);
+  const outputTokens = toNumber(usage.completion_tokens);
+  let costMicros = Math.round(toNumber(usage.cost) * 1_000_000);
+
+  // Gateways without usage accounting send tokens but no `cost`: estimate it from the price table.
+  if (costMicros === 0 && (inputTokens > 0 || outputTokens > 0)) {
+    const details = (usage.prompt_tokens_details ?? {}) as Record<string, unknown>;
+    const cacheRead = toNumber(details.cached_tokens);
+    const cacheWrite = toNumber(details.cache_creation_input_tokens);
+    const fresh = Math.max(0, inputTokens - cacheRead - cacheWrite);
+    const price = MODEL_PRICES[model] ?? DEFAULT_PRICE;
+    // price is USD per 1M tokens, which is exactly micro-dollars per token.
+    costMicros = Math.round(
+      fresh * price.input +
+        cacheRead * price.input * 0.1 +
+        cacheWrite * price.input * 1.25 +
+        outputTokens * price.output
+    );
+  }
+
+  return { model, inputTokens, outputTokens, costMicros };
 }
 
 // Scan an SSE stream's text for the usage-bearing chunk. OpenRouter emits usage exactly once, in

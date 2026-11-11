@@ -100,6 +100,7 @@ if (siteUrl) {
 const next = spawn("npx", ["next", "dev", "--port", port], {
   cwd: root,
   stdio: "inherit",
+  shell: process.platform === "win32",
   env: { ...process.env, ...(siteUrl ? { NEXT_PUBLIC_SITE_URL: siteUrl } : {}) },
 });
 
